@@ -69,12 +69,8 @@ a5_project/
 ├── tests/
 │   ├── __init__.py
 │   └── test_suite.py
-├── .github/workflows/tests.yml
 ├── demo.py
 ├── pyproject.toml
-├── requirements.txt
-├── SECURITY.md
-├── .gitignore
 └── README.md
 ```
 
