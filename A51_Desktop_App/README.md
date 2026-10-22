@@ -3,7 +3,17 @@
 Ứng dụng mở một **cửa sổ riêng bằng Tkinter**, xử lý file trực tiếp trên máy.
 Ứng dụng gọi service Python trực tiếp, hoạt động offline và không khởi chạy
 server HTTP. Đây là gói mã nguồn desktop Python, chưa phải file thực thi `.exe`.
-
+| File/thư mục | Tác dụng |
+|---|---|
+| **`a51_backend/`** | Chứa service xử lý file và hai thuật toán mã hóa/giải mã. Đây là phần backend chính. |
+| **`a51_desktop/`** | Chứa giao diện cửa sổ và phần kết nối giao diện với service. |
+| **`examples/`** | Chứa file `tieng_viet.txt` để bạn thử mã hóa/giải mã. |
+| **`tests/`** | Chứa các bài kiểm tra khả năng khôi phục dữ liệu, kiểm tra đầu vào và lưu file. |
+| **`.gitignore`** | Hướng dẫn Git bỏ qua các file tạm như `__pycache__`, `.pyc` và môi trường `.venv`. |
+| **`Mo_ung_dung.pyw`** | Mở ứng dụng trên Windows mà không kèm cửa sổ dòng lệnh, nếu máy đã liên kết `.pyw` với Python. |
+| **`README.md`** | Tài liệu hướng dẫn chạy, cấu trúc mã nguồn, chức năng và giới hạn của chương trình. |
+| **`run_desktop.py`** | Điểm khởi chạy chính: kiểm tra Tkinter và mở cửa sổ ứng dụng. |
+| **`start_windows.bat`** | File để nhấp đúp chạy trên Windows; tự gọi Python để thực thi `run_desktop.py`. |
 ## Cách chạy trên Windows
 
 1. Cài **Python 3.10 trở lên có Tcl/Tk**. Nếu đã có Python, có thể kiểm tra
