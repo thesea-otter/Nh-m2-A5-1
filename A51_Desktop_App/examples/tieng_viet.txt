@@ -1,0 +1,4 @@
+Xin chào Việt Nam!
+Đây là file thử mã hóa/giải mã.
+
+  Giữ nguyên khoảng trắng.  
