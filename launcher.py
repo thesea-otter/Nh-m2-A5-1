@@ -71,7 +71,7 @@ tk.Label(
 ).pack(pady=(0, 20))
 
 
-# Hàm tạo Nút bấm gọn gàng (Đã bỏ dòng chú thích nhỏ)
+# Hàm tạo Nút bấm
 def tao_nut_custom(parent, text, bg_color, fg_color, command):
   frame = tk.Frame(
       parent,
