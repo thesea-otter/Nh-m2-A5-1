@@ -30,7 +30,6 @@ def mo_web_truc_quan():
 
 
 def mo_app_tkinter_goc():
-  # Gọi chạy file Tkinter gốc
   script_dir = os.path.dirname(os.path.abspath(__file__))
   target_file = os.path.join(script_dir, "Backend fronted a5_1.py")
   if os.path.exists(target_file):
@@ -47,33 +46,33 @@ def thoat_chuong_trinh():
   sys.exit()
 
 
-# 3. Giao diện Cửa sổ Menu Trung tâm (Tương thích hoàn hảo với macOS)
+# 3. Giao diện Cửa sổ Menu Trung tâm
 cua_so = tk.Tk()
 cua_so.title("HỆ MÃ A5/1 & TINY A5/1 - BÀI TẬP NHÓM")
-cua_so.geometry("520x420")
+cua_so.geometry("480x350")
 cua_so.resizable(False, False)
-cua_so.configure(bg="#f8fafc")  # Nền xám trắng nhã nhặn, sang trọng
+cua_so.configure(bg="#f8fafc")
 
 # Tiêu đề chính
 tk.Label(
     cua_so,
     text="HỆ MÃ DÒNG A5/1 & TINY A5/1",
-    font=("Segoe UI", 16, "bold"),
+    font=("Segoe UI", 15, "bold"),
     fg="#0f172a",
     bg="#f8fafc",
-).pack(pady=(30, 5))
+).pack(pady=(28, 4))
 
 tk.Label(
     cua_so,
-    text="Trung tâm Điều khiển & Trực quan hóa Thuật toán",
-    font=("Segoe UI", 11),
-    fg="#475569",
+    text="Menu",
+    font=("Segoe UI", 10),
+    fg="#64748b",
     bg="#f8fafc",
-).pack(pady=(0, 25))
+).pack(pady=(0, 20))
 
 
-# Tạo Custom Nút Bấm bằng Frame + Label (Bỏ qua giới hạn màu của macOS)
-def tao_nut_custom(parent, text, subtext, bg_color, fg_color, command):
+# Hàm tạo Nút bấm gọn gàng (Đã bỏ dòng chú thích nhỏ)
+def tao_nut_custom(parent, text, bg_color, fg_color, command):
   frame = tk.Frame(
       parent,
       bg=bg_color,
@@ -82,7 +81,7 @@ def tao_nut_custom(parent, text, subtext, bg_color, fg_color, command):
       relief="solid",
       highlightbackground="#cbd5e1",
   )
-  frame.pack(fill="x", pady=8, ipady=8)
+  frame.pack(fill="x", pady=7, ipady=10)
 
   lbl_main = tk.Label(
       frame,
@@ -94,22 +93,9 @@ def tao_nut_custom(parent, text, subtext, bg_color, fg_color, command):
   )
   lbl_main.pack()
 
-  if subtext:
-    lbl_sub = tk.Label(
-        frame,
-        text=subtext,
-        font=("Segoe UI", 9),
-        fg="#64748b",
-        bg=bg_color,
-        cursor="hand2",
-    )
-    lbl_sub.pack()
-
-  # Đăng ký sự kiện click cho cả Frame lẫn Label
-  for widget in (frame, lbl_main) + (
-      (lbl_sub,) if subtext else ()
-  ):
-    widget.bind("<Button-1>", lambda e: command())
+  # Đăng ký sự kiện click
+  frame.bind("<Button-1>", lambda e: command())
+  lbl_main.bind("<Button-1>", lambda e: command())
 
   return frame
 
@@ -121,20 +107,18 @@ khung_nut.pack(fill="x", padx=45)
 # Nút 1: Mở Web Trực quan hóa
 tao_nut_custom(
     khung_nut,
-    text="✨ 1. MỞ GIAO DIỆN TRỰC QUAN HÓA (WEB)",
-    subtext="Mô phỏng động xoay thanh ghi & mã hóa/giải mã file",
-    bg_color="#e0f2fe",  # Nền xanh nhạt nổi bật
-    fg_color="#0369a1",  # Chữ xanh đậm tương phản cao
+    text="1. MỞ GIAO DIỆN TRỰC QUAN HÓA (WEB)",
+    bg_color="#e0f2fe",
+    fg_color="#0369a1",
     command=mo_web_truc_quan,
 )
 
 # Nút 2: Mở Giao diện Tkinter
 tao_nut_custom(
     khung_nut,
-    text="🖥️ 2. MỞ CỬA SỔ MÔ PHỎNG NHANH (TKINTER)",
-    subtext="Giao diện cửa sổ ứng dụng desktop gốc",
-    bg_color="#ffffff",  # Nền trắng
-    fg_color="#334155",  # Chữ ghi xám đậm
+    text="2. MỞ CỬA SỔ MÔ PHỎNG NHANH (TKINTER)",
+    bg_color="#ffffff",
+    fg_color="#334155",
     command=mo_app_tkinter_goc,
 )
 
@@ -142,9 +126,8 @@ tao_nut_custom(
 tao_nut_custom(
     khung_nut,
     text="❌ THOÁT CHƯƠNG TRÌNH",
-    subtext="",
-    bg_color="#fef2f2",  # Nền đỏ nhạt
-    fg_color="#991b1b",  # Chữ đỏ đậm
+    bg_color="#fef2f2",
+    fg_color="#991b1b",
     command=thoat_chuong_trinh,
 )
 
