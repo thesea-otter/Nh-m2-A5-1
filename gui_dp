@@ -1,0 +1,501 @@
+# -*- coding: utf-8 -*-
+"""Giao diện desktop (Tkinter) cho backend A5/1 & Tiny A5/1.
+
+Chạy:
+    python gui.py
+
+Chỉ dùng thư viện chuẩn của Python (Tkinter). Mọi phép mã hóa đều đi qua
+``service.cipher_service.CipherService``; file này không chứa thuật toán.
+
+Lưu ý: A5/1 là mã dòng (XOR với keystream) nên giải mã chính là XOR lại
+bản mã với đúng keystream, tức là dùng cùng thuật toán + khóa + frame.
+"""
+
+import json
+import os
+import secrets
+import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
+from tkinter.scrolledtext import ScrolledText
+
+# Cho phép chạy `python gui.py` từ bất kỳ thư mục nào.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from service.cipher_service import CipherService  # noqa: E402
+
+ALGORITHMS = [
+    ("A5/1 đầy đủ  (khóa 64 bit, frame 22 bit)", "a5/1"),
+    ("Tiny A5/1  (khóa 23 bit, không dùng frame)", "a5/1-tiny"),
+]
+DEFAULT_KEYS = {
+    "a5/1": "0001000100100010001100110100010001010101011001100111011110001000",
+    "a5/1-tiny": "10010101001110100110000",
+}
+DEFAULT_FRAME = {"a5/1": 7, "a5/1-tiny": 0}
+MAX_FRAME = (1 << 22) - 1
+MAX_TEXT_BYTES = 16 * 1024  # giữ giao diện mượt (backend thuần Python)
+MAX_BITS = 100_000
+
+BG = "#f2f5f6"
+FG = "#20323f"
+OK_COLOR = "#1a7f37"
+ERR_COLOR = "#c62828"
+
+
+def _mono_font(root, size=11):
+    families = set(tkfont.families(root))
+    for name in ("Consolas", "DejaVu Sans Mono", "Menlo", "Courier New"):
+        if name in families:
+            return (name, size)
+    return ("Courier", size)
+
+
+class ResultBox(ttk.Frame):
+    """Ô kết quả chỉ đọc, có nút sao chép."""
+
+    def __init__(self, master, title, font, status, height=3, wrap="char"):
+        super().__init__(master)
+        self._status = status
+        self._title = title
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+        head = ttk.Frame(self)
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        ttk.Label(head, text=title).pack(side="left")
+        ttk.Button(head, text="Sao chép", command=self.copy, width=10).pack(side="right")
+        self.text = ScrolledText(
+            self, height=height, wrap=wrap, font=font, state="disabled",
+            relief="solid", borderwidth=1, background="white", foreground=FG,
+            padx=8, pady=6,
+        )
+        self.text.grid(row=1, column=0, sticky="nsew")
+
+    def set(self, value):
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", value)
+        self.text.configure(state="disabled")
+
+    def get(self):
+        return self.text.get("1.0", "end-1c")
+
+    def copy(self):
+        value = self.get()
+        if not value:
+            self._status("Chưa có nội dung để sao chép.")
+            return
+        top = self.winfo_toplevel()
+        top.clipboard_clear()
+        top.clipboard_append(value)
+        self._status(f"Đã sao chép: {self._title}")
+
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.service = CipherService()
+        self.last_result = None
+        self.mono = _mono_font(root)
+
+        root.title("A5/1 & Tiny A5/1 — Mã hóa / Giải mã")
+        root.geometry("1020x820")
+        root.minsize(880, 680)
+        root.configure(background=BG)
+
+        self.algo_var = tk.StringVar(value=ALGORITHMS[0][0])
+        self.key_var = tk.StringVar(value=DEFAULT_KEYS["a5/1"])
+        self.frame_var = tk.StringVar(value=str(DEFAULT_FRAME["a5/1"]))
+        self.key_info = tk.StringVar()
+        self.status_var = tk.StringVar(value="Sẵn sàng. Nhập bản rõ rồi bấm “Mã hóa”.")
+
+        self._style()
+        self._build_menu()
+        self._build_layout()
+
+        self.algo_var.trace_add("write", self._on_algorithm_changed)
+        self.key_var.trace_add("write", self._update_key_info)
+        self._on_algorithm_changed(initial=True)
+
+        root.bind("<Control-Return>", lambda _e: self._run_current_tab())
+
+    # ------------------------------------------------------------------
+    # Dựng giao diện
+    # ------------------------------------------------------------------
+    def _style(self):
+        style = ttk.Style(self.root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure("TFrame", background=BG)
+        style.configure("TLabelframe", background=BG)
+        style.configure("TLabelframe.Label", background=BG, foreground=FG, font=("", 10, "bold"))
+        style.configure("TLabel", background=BG, foreground=FG)
+        style.configure("Muted.TLabel", foreground="#5d707a")
+        style.configure("TButton", padding=(10, 5))
+        style.configure("Accent.TButton", padding=(14, 7), font=("", 10, "bold"))
+        style.configure("TNotebook", background=BG)
+        style.configure("TNotebook.Tab", padding=(14, 6))
+
+    def _build_menu(self):
+        menubar = tk.Menu(self.root)
+        file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_command(label="Nạp ví dụ Tiny A5/1 (111 → 011)", command=self.load_tiny_example)
+        file_menu.add_command(label="Nạp ví dụ A5/1 đầy đủ", command=self.load_full_example)
+        file_menu.add_separator()
+        file_menu.add_command(label="Lưu kết quả gần nhất (.json)…", command=self.save_result)
+        file_menu.add_separator()
+        file_menu.add_command(label="Thoát", command=self.root.destroy)
+        menubar.add_cascade(label="Tệp", menu=file_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.add_command(label="Hướng dẫn nhanh", command=self.show_help)
+        help_menu.add_command(label="Giới thiệu", command=self.show_about)
+        menubar.add_cascade(label="Trợ giúp", menu=help_menu)
+        self.root.config(menu=menubar)
+
+    def _build_layout(self):
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(1, weight=1)
+
+        # --- Cấu hình dùng chung ---
+        cfg = ttk.LabelFrame(self.root, text="Cấu hình", padding=12)
+        cfg.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+        cfg.columnconfigure(1, weight=1)
+
+        ttk.Label(cfg, text="Thuật toán").grid(row=0, column=0, sticky="w", pady=3)
+        self.algo_box = ttk.Combobox(
+            cfg, textvariable=self.algo_var, state="readonly",
+            values=[label for label, _ in ALGORITHMS],
+        )
+        self.algo_box.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(cfg, text="Khóa (nhị phân)").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Entry(cfg, textvariable=self.key_var, font=self.mono).grid(
+            row=1, column=1, sticky="ew", padx=(10, 8), pady=3
+        )
+        ttk.Button(cfg, text="Tạo khóa ngẫu nhiên", command=self.random_key).grid(row=1, column=2, pady=3)
+        self.key_info_label = ttk.Label(cfg, textvariable=self.key_info, style="Muted.TLabel")
+        self.key_info_label.grid(row=2, column=1, sticky="w", padx=(10, 0))
+
+        ttk.Label(cfg, text="Frame (0 – 4194303)").grid(row=3, column=0, sticky="w", pady=(6, 3))
+        self.frame_spin = ttk.Spinbox(
+            cfg, from_=0, to=MAX_FRAME, textvariable=self.frame_var, width=14, font=self.mono
+        )
+        self.frame_spin.grid(row=3, column=1, sticky="w", padx=(10, 0), pady=(6, 3))
+
+        # --- Các tab chức năng ---
+        self.tabs = ttk.Notebook(self.root)
+        self.tabs.grid(row=1, column=0, sticky="nsew", padx=14, pady=4)
+        self._build_encrypt_tab()
+        self._build_decrypt_tab()
+        self._build_bits_tab()
+
+        # --- Thanh trạng thái ---
+        self.status_label = ttk.Label(self.root, textvariable=self.status_var, anchor="w", wraplength=980)
+        self.status_label.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 10))
+
+    def _input_box(self, parent, row, height):
+        box = ScrolledText(
+            parent, height=height, wrap="word", font=self.mono, relief="solid",
+            borderwidth=1, background="white", foreground=FG, padx=8, pady=6,
+        )
+        box.grid(row=row, column=0, sticky="nsew")
+        return box
+
+    def _build_encrypt_tab(self):
+        tab = ttk.Frame(self.tabs, padding=12)
+        self.tabs.add(tab, text="  Mã hóa văn bản  ")
+        tab.columnconfigure(0, weight=1)
+        for r in (3, 4, 5, 6):
+            tab.rowconfigure(r, weight=1)
+
+        ttk.Label(tab, text="Bản rõ (văn bản UTF-8, hỗ trợ tiếng Việt)").grid(row=0, column=0, sticky="w", pady=(0, 3))
+        self.enc_input = self._input_box(tab, 1, 4)
+        self.enc_input.insert("1.0", "Xin chào A5/1!")
+
+        bar = ttk.Frame(tab)
+        bar.grid(row=2, column=0, sticky="w", pady=8)
+        ttk.Button(bar, text="Mã hóa  (Ctrl+Enter)", style="Accent.TButton",
+                   command=lambda: self._run(self.do_encrypt)).pack(side="left")
+        ttk.Button(bar, text="Xóa", command=self.clear_encrypt).pack(side="left", padx=8)
+
+        self.enc_hex = ResultBox(tab, "Bản mã (hex) — dùng cho tab Giải mã", self.mono, self.set_status, height=2)
+        self.enc_bin = ResultBox(tab, "Bản mã (nhị phân)", self.mono, self.set_status, height=3)
+        self.enc_ks = ResultBox(tab, "Keystream", self.mono, self.set_status, height=3)
+        self.enc_pbin = ResultBox(tab, "Bản rõ (nhị phân)", self.mono, self.set_status, height=3)
+        for r, w in enumerate((self.enc_hex, self.enc_bin, self.enc_ks, self.enc_pbin), start=3):
+            w.grid(row=r, column=0, sticky="nsew", pady=(0, 6))
+
+    def _build_decrypt_tab(self):
+        tab = ttk.Frame(self.tabs, padding=12)
+        self.tabs.add(tab, text="  Giải mã  ")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+        tab.rowconfigure(4, weight=1)
+        tab.rowconfigure(5, weight=1)
+
+        head = ttk.Frame(tab)
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        ttk.Label(head, text="Bản mã").pack(side="left")
+        self.dec_format = tk.StringVar(value="Hex")
+        ttk.Combobox(head, textvariable=self.dec_format, values=["Hex", "Nhị phân"],
+                     state="readonly", width=10).pack(side="right")
+        ttk.Label(head, text="Định dạng:").pack(side="right", padx=(0, 6))
+
+        self.dec_input = self._input_box(tab, 1, 4)
+
+        bar = ttk.Frame(tab)
+        bar.grid(row=2, column=0, sticky="w", pady=8)
+        ttk.Button(bar, text="Giải mã  (Ctrl+Enter)", style="Accent.TButton",
+                   command=lambda: self._run(self.do_decrypt)).pack(side="left")
+        ttk.Button(bar, text="Dán bản mã từ tab Mã hóa", command=self.paste_from_encrypt).pack(side="left", padx=8)
+        ttk.Label(tab, text="Giải mã cần đúng thuật toán, khóa và frame đã dùng khi mã hóa.",
+                  style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
+
+        self.dec_text = ResultBox(tab, "Bản rõ (UTF-8)", self.mono, self.set_status, height=5, wrap="word")
+        self.dec_hex = ResultBox(tab, "Bản rõ (hex)", self.mono, self.set_status, height=3)
+        self.dec_text.grid(row=4, column=0, sticky="nsew", pady=(0, 6))
+        self.dec_hex.grid(row=5, column=0, sticky="nsew")
+
+    def _build_bits_tab(self):
+        tab = ttk.Frame(self.tabs, padding=12)
+        self.tabs.add(tab, text="  Chuỗi bit  ")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+        tab.rowconfigure(4, weight=1)
+        tab.rowconfigure(5, weight=1)
+
+        ttk.Label(tab, text="Chuỗi bit đầu vào (chỉ gồm 0 và 1, độ dài bất kỳ)").grid(row=0, column=0, sticky="w", pady=(0, 3))
+        self.bits_input = self._input_box(tab, 1, 3)
+        self.bits_input.insert("1.0", "111")
+
+        bar = ttk.Frame(tab)
+        bar.grid(row=2, column=0, sticky="w", pady=8)
+        ttk.Button(bar, text="XOR với keystream  (Ctrl+Enter)", style="Accent.TButton",
+                   command=lambda: self._run(self.do_bits)).pack(side="left")
+        ttk.Label(tab, text="Ví dụ trên lớp: Tiny A5/1, K = 100101010011101 00110000 (mặc định), P = 111 → S = 100, C = 011.",
+                  style="Muted.TLabel", wraplength=900).grid(row=3, column=0, sticky="w", pady=(0, 6))
+
+        self.bits_ks = ResultBox(tab, "Keystream", self.mono, self.set_status, height=3)
+        self.bits_out = ResultBox(tab, "Kết quả (bản mã/bản rõ) nhị phân", self.mono, self.set_status, height=3)
+        self.bits_ks.grid(row=4, column=0, sticky="nsew", pady=(0, 6))
+        self.bits_out.grid(row=5, column=0, sticky="nsew")
+
+    # ------------------------------------------------------------------
+    # Tiện ích
+    # ------------------------------------------------------------------
+    def set_status(self, message, error=False):
+        self.status_var.set(message)
+        self.status_label.configure(foreground=ERR_COLOR if error else FG)
+
+    def algo_name(self):
+        label = self.algo_var.get()
+        for text, name in ALGORITHMS:
+            if text == label:
+                return name
+        return ALGORITHMS[0][1]
+
+    def _on_algorithm_changed(self, *_args, initial=False):
+        name = self.algo_name()
+        info = self.service.info(name)
+        current = self.key_var.get().strip()
+        if initial or not current or current in DEFAULT_KEYS.values():
+            self.key_var.set(DEFAULT_KEYS[name])
+        if info["uses_frame"]:
+            self.frame_spin.configure(state="normal")
+            if self.frame_var.get().strip() in ("", "0"):
+                self.frame_var.set(str(DEFAULT_FRAME[name]))
+        else:
+            self.frame_var.set("0")
+            self.frame_spin.configure(state="disabled")
+        self._update_key_info()
+
+    def _update_key_info(self, *_args):
+        info = self.service.info(self.algo_name())
+        value = self.key_var.get().strip()
+        valid = len(value) == info["key_bits"] and set(value) <= {"0", "1"}
+        self.key_info.set(f"{len(value)} / {info['key_bits']} bit" + ("  ✓ hợp lệ" if valid else "  ✗ chưa hợp lệ"))
+        self.key_info_label.configure(foreground=OK_COLOR if valid else ERR_COLOR)
+
+    def random_key(self):
+        bits = self.service.info(self.algo_name())["key_bits"]
+        self.key_var.set(f"{secrets.randbits(bits):0{bits}b}")
+        self.set_status("Đã tạo khóa ngẫu nhiên. Hãy lưu lại khóa để giải mã.")
+
+    def _frame(self):
+        if not self.service.info(self.algo_name())["uses_frame"]:
+            return 0
+        try:
+            frame = int(self.frame_var.get().strip())
+        except ValueError:
+            raise ValueError(f"Frame phải là số nguyên từ 0 đến {MAX_FRAME}.") from None
+        if not 0 <= frame <= MAX_FRAME:
+            raise ValueError(f"Frame phải nằm trong khoảng 0 đến {MAX_FRAME}.")
+        return frame
+
+    def _run(self, func):
+        try:
+            func()
+        except (ValueError, TypeError, KeyError) as exc:
+            message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
+            self.set_status(f"Lỗi: {message}", error=True)
+            messagebox.showerror("Không thực hiện được", message, parent=self.root)
+
+    def _run_current_tab(self):
+        index = self.tabs.index(self.tabs.select())
+        self._run((self.do_encrypt, self.do_decrypt, self.do_bits)[index])
+
+    # ------------------------------------------------------------------
+    # Hành động
+    # ------------------------------------------------------------------
+    def do_encrypt(self):
+        plaintext = self.enc_input.get("1.0", "end-1c")
+        if not plaintext:
+            raise ValueError("Hãy nhập bản rõ cần mã hóa.")
+        if len(plaintext.encode("utf-8")) > MAX_TEXT_BYTES:
+            raise ValueError(f"Bản rõ tối đa {MAX_TEXT_BYTES // 1024} KiB (UTF-8).")
+        result = self.service.encrypt_text(
+            self.algo_name(), plaintext, self.key_var.get().strip(), self._frame()
+        )
+        self.enc_hex.set(result["ciphertext_hex"])
+        self.enc_bin.set(result["ciphertext_binary"])
+        self.enc_ks.set(result["keystream"])
+        self.enc_pbin.set(result["plaintext_binary"])
+        self.last_result = result
+        self.set_status(f"Đã mã hóa {len(result['ciphertext_hex']) // 2} byte. Bản mã hex nằm ở ô đầu tiên.")
+
+    def clear_encrypt(self):
+        self.enc_input.delete("1.0", "end")
+        for box in (self.enc_hex, self.enc_bin, self.enc_ks, self.enc_pbin):
+            box.set("")
+        self.set_status("Đã xóa.")
+
+    def paste_from_encrypt(self):
+        value = self.enc_hex.get()
+        if not value:
+            raise_msg = "Tab Mã hóa chưa có bản mã."
+            self.set_status(raise_msg, error=True)
+            return
+        self.dec_format.set("Hex")
+        self.dec_input.delete("1.0", "end")
+        self.dec_input.insert("1.0", value)
+        self.set_status("Đã dán bản mã (hex) từ tab Mã hóa.")
+
+    def do_decrypt(self):
+        name = self.algo_name()
+        raw = "".join(self.dec_input.get("1.0", "end-1c").split())
+        if not raw:
+            raise ValueError("Hãy nhập bản mã cần giải mã.")
+        if self.dec_format.get() == "Hex":
+            try:
+                data = bytes.fromhex(raw)
+            except ValueError:
+                raise ValueError("Bản mã hex không hợp lệ (chỉ gồm 0-9, a-f và độ dài chẵn).") from None
+        else:
+            data = self.service.binary_to_bytes(raw)
+        if len(data) > MAX_TEXT_BYTES:
+            raise ValueError(f"Bản mã tối đa {MAX_TEXT_BYTES // 1024} KiB.")
+
+        key_bytes = self.service.key_binary_to_bytes(name, self.key_var.get().strip())
+        frame = self._frame()
+        plain = self.service.encrypt(name, data, key_bytes, frame)  # XOR đối xứng
+
+        try:
+            text = plain.decode("utf-8")
+            note = f"Đã giải mã {len(plain)} byte."
+            warn = False
+        except UnicodeDecodeError:
+            text = plain.decode("utf-8", errors="replace")
+            note = "Giải mã xong nhưng kết quả KHÔNG phải UTF-8 hợp lệ — có thể sai khóa, frame hoặc thuật toán."
+            warn = True
+        self.dec_text.set(text)
+        self.dec_hex.set(plain.hex())
+        self.last_result = {
+            "algorithm": name, "frame": str(frame),
+            "ciphertext_hex": data.hex(), "plaintext": text, "plaintext_hex": plain.hex(),
+        }
+        self.set_status(note, error=warn)
+
+    def do_bits(self):
+        bits = "".join(self.bits_input.get("1.0", "end-1c").split())
+        if not bits:
+            raise ValueError("Hãy nhập chuỗi bit.")
+        if len(bits) > MAX_BITS:
+            raise ValueError(f"Chuỗi bit tối đa {MAX_BITS:,} bit.")
+        result = self.service.encrypt_binary(
+            self.algo_name(), bits, self.key_var.get().strip(), self._frame()
+        )
+        self.bits_ks.set(result["keystream"])
+        self.bits_out.set(result["ciphertext_binary"])
+        self.last_result = result
+        self.set_status(f"Đã XOR {len(bits)} bit với keystream.")
+
+    # ------------------------------------------------------------------
+    # Menu
+    # ------------------------------------------------------------------
+    def load_tiny_example(self):
+        self.algo_var.set(ALGORITHMS[1][0])
+        self.key_var.set(DEFAULT_KEYS["a5/1-tiny"])
+        self.bits_input.delete("1.0", "end")
+        self.bits_input.insert("1.0", "111")
+        self.tabs.select(2)
+        self._run(self.do_bits)
+
+    def load_full_example(self):
+        self.algo_var.set(ALGORITHMS[0][0])
+        self.key_var.set(DEFAULT_KEYS["a5/1"])
+        self.frame_var.set(str(DEFAULT_FRAME["a5/1"]))
+        self.enc_input.delete("1.0", "end")
+        self.enc_input.insert("1.0", "Xin chào A5/1!")
+        self.tabs.select(0)
+        self._run(self.do_encrypt)
+
+    def save_result(self):
+        if self.last_result is None:
+            messagebox.showinfo("Chưa có kết quả", "Hãy mã hóa hoặc giải mã trước khi lưu.", parent=self.root)
+            return
+        filename = filedialog.asksaveasfilename(
+            parent=self.root, title="Lưu kết quả", defaultextension=".json",
+            initialfile="ket_qua_a51.json", filetypes=[("JSON", "*.json")],
+        )
+        if not filename:
+            return
+        try:
+            with open(filename, "w", encoding="utf-8") as handle:
+                json.dump(self.last_result, handle, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            messagebox.showerror("Không lưu được file", str(exc), parent=self.root)
+            return
+        self.set_status(f"Đã lưu: {filename}")
+
+    def show_help(self):
+        messagebox.showinfo(
+            "Hướng dẫn nhanh",
+            "1. Chọn thuật toán và nhập khóa nhị phân (hoặc bấm “Tạo khóa ngẫu nhiên”).\n"
+            "2. A5/1 đầy đủ cần thêm số frame; Tiny A5/1 không dùng frame.\n"
+            "3. Tab “Mã hóa văn bản”: nhập bản rõ → Mã hóa → lấy bản mã dạng hex.\n"
+            "4. Tab “Giải mã”: dán bản mã → Giải mã (đúng thuật toán, khóa, frame).\n"
+            "5. Tab “Chuỗi bit”: XOR chuỗi bit tùy ý với keystream (ví dụ Tiny trên lớp).\n\n"
+            "Phím tắt: Ctrl+Enter chạy chức năng của tab hiện tại.",
+            parent=self.root,
+        )
+
+    def show_about(self):
+        messagebox.showinfo(
+            "Giới thiệu",
+            "Giao diện Tkinter cho backend A5/1 & Tiny A5/1.\n\n"
+            "Chỉ dùng cho học tập. A5/1 là thuật toán cũ và đã bị phá; "
+            "không dùng để bảo vệ dữ liệu thật.",
+            parent=self.root,
+        )
+
+
+def main():
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
